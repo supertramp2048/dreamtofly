@@ -12,6 +12,10 @@ import { AuthGuard } from './guards/auth.guard';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ChatModule } from './chat/chat.module';
+import { BullMetadataAccessor } from '@nestjs/bullmq/dist/bull-metadata.accessor';
+import { BullModule } from '@nestjs/bullmq';
+import { JobConsumer } from './job.consumer';
+import { ChatbotModule } from './chatbot/chatbot.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -38,7 +42,18 @@ import { ChatModule } from './chat/chat.module';
     AuthModule,
     AuthSessionModule,
     JwtModule,
-    ChatModule
+    ChatModule,
+    BullModule.forRoot({
+      connection: {
+        host: 'localhost',
+        port: 6379,
+      }
+    }),
+    BullModule.registerQueue({
+      name: 'job-queue', 
+      prefix: 'bull',
+    }),
+    ChatbotModule,
 
 ],
   controllers: [AppController],
@@ -47,7 +62,8 @@ import { ChatModule } from './chat/chat.module';
     {
       provide: APP_GUARD,
       useClass: AuthGuard
-    }
+    },
+    JobConsumer
   ],
 })
 export class AppModule {

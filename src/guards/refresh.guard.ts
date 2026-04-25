@@ -22,7 +22,7 @@ export class RefreshGuard implements CanActivate {
             req['session'] = payload
             return true
         } catch (error) {
-            if (error.name === 'TokenExpiredError') {
+            if (error === 'TokenExpiredError') {
                 throw new UnauthorizedException('Access token expired')
             }
             throw new UnauthorizedException()

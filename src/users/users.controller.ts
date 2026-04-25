@@ -1,9 +1,11 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, BadRequestException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { PageOptionsDto } from 'src/common/pagination/dto/pageOption.dto';
 import { PageDto } from 'src/common/pagination/dto/page.dto';
+import { GetUser } from 'src/customeDecorator/getUser.decorator';
+import { User } from './entities/user.entity';
 
 @Controller('users')
 export class UsersController {
@@ -19,11 +21,22 @@ export class UsersController {
     return this.usersService.findAll(pageOptionsDto);
   }
 
+  @Get('search')
+  findByName(@Query('name') name: string, @GetUser() user) {
+    const trimmedName = name?.trim();
+    const currentUid = user.userId
+    //console.log(user);
+    
+    if (!trimmedName) {
+      throw new BadRequestException('Missing name query');
+    }
+    return this.usersService.findByName(trimmedName, currentUid);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(id);
   }
-
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(id, updateUserDto);

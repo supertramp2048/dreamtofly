@@ -1,22 +1,21 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { User } from "../../users/entities/user.entity"; 
-import { Conversation } from './conversation.entity';
 enum MessageStatus{
     activated,
     revoked,
     deleted
 }
-@Entity({ name: 'Message' })
+@Entity({ name: 'AiMessage' })
 export class Message {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
 
   @Column({ type: 'bigint' })
-  conversationId: string;
-
-  @Column({ type: 'bigint' })
   senderId: string;
   
+  @Column({type: 'bigint'})
+  receiverId: string
+
   @Column({type: 'enum',enum: MessageStatus ,default: MessageStatus.activated})
   status: string;
 
@@ -29,11 +28,11 @@ export class Message {
   @CreateDateColumn({ type: 'timestamp', precision: 3, default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
 
-  @ManyToOne(() => Conversation, conversation => conversation.messages)
-  @JoinColumn({ name: 'conversationId' })
-  conversation: Conversation;
-
   @ManyToOne(() => User)
   @JoinColumn({ name: 'senderId' })
   sender: User;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'receiverId' })
+  receiver: User;
 }

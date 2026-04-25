@@ -11,6 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { UsePipes, ValidationPipe, UnauthorizedException } from '@nestjs/common';
 import { ChatService } from './chat.service'; // Bạn sẽ tạo service này sau
 import { SendMessageDto } from './dto/send-message.dto';
+import { ChatbotService } from 'src/chatbot/chatbot.service';
 
 // Mở cổng CORS nếu frontend chạy khác port
 @WebSocketGateway({
@@ -22,7 +23,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @WebSocketServer()
     server: Server;
 
-    constructor(private readonly chatService: ChatService) { }
+    private readonly userSocketIds = new Map<string, Set<string>>();
+
+    private conversationUpdatesRoom(userId: string) {
+        return `conversation_updates:${userId}`;
+    }
+
+    private aiRoom(userId: string) {
+        return `ai_room:${userId}`;
+    }
+
+    constructor(
+        private readonly chatService: ChatService,
+        private readonly chatBotService: ChatbotService
+    ) { }
 
     // 1. BẮT SỰ KIỆN KHI CLIENT KẾT NỐI
     async handleConnection(client: Socket) {
@@ -35,19 +49,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             // Giải mã token và lấy thông tin user (Tích hợp logic từ module Auth của bạn)
             // Giả sử sau khi verify, bạn có userId:
             const userId = await this.chatService.verifyUserToken(token);
-            console.log("id ",userId);
-            
+
             // Lưu userId vào object client để dùng cho các request sau
             client.data.userId = userId;
 
+            const socketIds = this.userSocketIds.get(userId) ?? new Set<string>();
+            socketIds.add(client.id);
+            this.userSocketIds.set(userId, socketIds);
+
             // Lấy tất cả các phòng chat (conversationId) mà user này đang tham gia từ DB
             const userConversations = await this.chatService.getUserConversationIds(userId);
-
             // Ép socket của user này join vào tất cả các phòng đó
             if (userConversations.length > 0) {
                 client.join(userConversations);
             }
-
             console.log(`User ${userId} connected with socket ${client.id}`);
         } catch (error) {
             console.log(`Connection rejected: ${error}`);
@@ -58,6 +73,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 2. BẮT SỰ KIỆN KHI CLIENT NGẮT KẾT NỐI
     handleDisconnect(client: Socket) {
         console.log(`User ${client.data.userId} disconnected`);
+        const userId = client.data.userId as string | undefined;
+        if (userId) {
+            const socketIds = this.userSocketIds.get(userId);
+            if (socketIds) {
+                socketIds.delete(client.id);
+                if (socketIds.size === 0) {
+                    this.userSocketIds.delete(userId);
+                }
+            }
+        }
         // Socket.io tự động rời khỏi các rooms, không cần xử lý thủ công
     }
 
@@ -73,23 +98,104 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Lưu tin nhắn vào Database thông qua ChatService
         const savedMessage = await this.chatService.saveMessage(
             senderId, payload);
-            console.log(savedMessage);
-            
+        console.log(savedMessage);
+
         // 2. Xử lý Join Room đột xuất nếu là phòng mới
         if (savedMessage.isNewConversation) {
             // Ép người gửi (A) join vào phòng mới
             client.join(savedMessage.conversationId);
+            if (savedMessage.receiverId) {
+                console.log("join other");
+                
+                const receiverSocketIds = this.userSocketIds.get(savedMessage.receiverId);
+                if (receiverSocketIds) {
+                    console.log('join socket ');
+                    
+                    for (const socketId of receiverSocketIds) {
+                        this.server.sockets.sockets.get(socketId)?.join(savedMessage.conversationId);
+                    }
+                }
+            }
+        }
+        const lastMessageContent = savedMessage.message?.content
+            ?? (savedMessage.message?.fileUrl ? '[file]' : null);
 
-            // Bắn một sự kiện ĐẶC BIỆT cho người nhận (B) dựa vào room mang tên userId của họ
-            // Báo cho máy của B biết: "Có phòng chat mới nè, cậu chủ động join bằng code frontend đi"
-            this.server.to(savedMessage.receiverId).emit('new_conversation_created', {
-                conversationId: savedMessage.conversationId,
-                message: savedMessage.message // Đính kèm luôn tin nhắn đầu tiên để UI hiện luôn
-            });
+        const senderConversationPayload = await this.chatService.buildConversationPayloadForUser(
+            savedMessage.conversationId,
+            senderId,
+            lastMessageContent,
+        );
+        this.server.to(this.conversationUpdatesRoom(senderId)).emit(
+            'receive_conversation',
+            senderConversationPayload,
+        );
+
+        const receiverId = senderConversationPayload.receiverId || savedMessage.receiverId;
+        if (receiverId) {
+            const receiverConversationPayload = await this.chatService.buildConversationPayloadForUser(
+                savedMessage.conversationId,
+                receiverId,
+                lastMessageContent,
+            );
+            this.server.to(this.conversationUpdatesRoom(receiverId)).emit(
+                'receive_conversation',
+                receiverConversationPayload,
+            );
         }
         // Phát tin nhắn đến TẤT CẢ mọi người trong phòng (bao gồm cả người gửi để cập nhật UI)
-        this.server.to(payload.conversationId).emit('receive_message', savedMessage);
+        this.server.to(savedMessage.conversationId).emit('receive_message', savedMessage.message);
 
+        // Tính năng Push Notification (Gợi ý: Gọi logic đẩy vào Queue ở đây cho các user đang offline)
+        // this.chatService.handleOfflineNotifications(payload.conversationId, senderId, savedMessage);
+    }
+    @UsePipes(new ValidationPipe())
+    @SubscribeMessage('join_room')
+    handleJoinRoom(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: { conversationId: string },
+    ) {
+        client.join(payload.conversationId);
+        console.log(`Socket ${client.id} joined room ${payload.conversationId}`);
+    }
+
+    @SubscribeMessage('join_ai_room')
+    handleJoinAiRoom(@ConnectedSocket() client: Socket) {
+        const userId = client.data.userId as string | undefined;
+        if (!userId) {
+            throw new UnauthorizedException('Missing user in request');
+        }
+        client.join(this.aiRoom(userId));
+        console.log(`Socket ${client.id} joined ai room ${userId}`);
+    }
+
+    @SubscribeMessage('join_all')
+    handleJoinAll(@ConnectedSocket() client: Socket) {
+        const userId = client.data.userId as string | undefined;
+        if (!userId) {
+            throw new UnauthorizedException('Missing user in request');
+        }
+        client.join(this.conversationUpdatesRoom(userId));
+        console.log(`Socket ${client.id} joined conversation updates ${userId}`);
+    }
+    //  XỬ LÝ LẮNG NGHE TIN NHẮN TỪ CLIENT toi ai
+    @UsePipes(new ValidationPipe())
+    @SubscribeMessage('send_message_to_chatbot')
+    async handleAiMessage(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: SendMessageDto,
+    ) {
+        const senderId = client.data.userId;
+        console.log('Đã nhận được payload:', payload);
+        // Lưu tin nhắn vào Database thông qua ChatService
+        const savedMessage = await this.chatBotService.saveMessage(
+            senderId,'1010', payload);
+        console.log(savedMessage);
+        // Phát tin nhắn đến đúng AI room (chỉ người dùng hiện tại)
+        this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedMessage.message);
+        const reply = { content: 'reply message' }
+        const savedReplyMessage = await this.chatBotService.saveMessage(
+            '1010',senderId, reply);
+        this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedReplyMessage.message);
         // Tính năng Push Notification (Gợi ý: Gọi logic đẩy vào Queue ở đây cho các user đang offline)
         // this.chatService.handleOfflineNotifications(payload.conversationId, senderId, savedMessage);
     }

@@ -1,11 +1,6 @@
-import { Optional } from '@nestjs/common';
-import { IsString,ValidateIf , IsNotEmpty, IsOptional } from 'class-validator';
+import { IsString,ValidateIf , IsNotEmpty } from 'class-validator';
 
 export class SendMessageDto {
-  @IsString()
-  @IsOptional()
-  conversationId: string;
-
   @ValidateIf(o => !o.fileUrl)
   @IsNotEmpty({ message: 'Phải nhập nội dung tin nhắn hoặc đính kèm file' })
   @IsString()
@@ -15,8 +10,4 @@ export class SendMessageDto {
   @IsNotEmpty({ message: 'Phải nhập nội dung tin nhắn hoặc đính kèm file' })
   @IsString()
   fileUrl?: string;
-
-  @IsString()
-  @IsOptional()
-  receiverId: string;
 }

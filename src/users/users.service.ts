@@ -1,7 +1,7 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { DataSource } from 'typeorm';
+import { DataSource, ILike } from 'typeorm';
 import { QueueAction } from 'rxjs/internal/scheduler/QueueAction';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -45,6 +45,21 @@ export class UsersService {
   }
   async findOneByEmail(email: string) {
     return { data: await this.usersRepository.findOneBy({ email }) }
+  }
+
+  async findByName(name: string, currentUid: string) {
+    // return {
+    //   data: await this.usersRepository.find({
+    //     where: { name: ILike(`%${name}%`) },
+    //   }),
+    // };
+    const res = await this.usersRepository
+      .createQueryBuilder('u')
+      .where('u.id <> :id', { id: currentUid })
+      .andWhere('u.name ILike :name', { name: `%${name}%` })
+      .getMany();
+
+    return { data: res };
   }
   async update(id: string, updateUserDto: UpdateUserDto) {
     return { data: await this.usersRepository.update({ id: id }, updateUserDto) };

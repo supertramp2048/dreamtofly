@@ -1,14 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { User } from "../../users/entities/user.entity"; 
-import { Conversation } from './conversation.entity';
+import { Conversation } from './chatbotConversation.entities';
 
 export enum ParticipantRole {
   ADMIN = 'admin',
   MEMBER = 'member',
 }
 
-@Index('ux_participant_conversation_user', ['conversationId', 'userId'], { unique: true })
-@Entity({ name: 'Participant' })
+@Entity({ name: 'AiParticipant' })
 export class Participant {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
