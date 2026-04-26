@@ -12,7 +12,9 @@ import { FirebaseService } from '../chat/firebase.service';
 import { CreateChatbotDto } from './dto/create-chatbot.dto';
 import { PageOptionsDto } from 'src/common/pagination/dto/pageOption.dto';
 import { paginate } from 'src/common/pagination/helper/pagination.helper';
-import { log } from 'util';
+import { HttpService } from '@nestjs/axios';
+import { Observable, timeout } from 'rxjs';
+import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class ChatbotService {
   constructor(
@@ -21,7 +23,9 @@ export class ChatbotService {
     private readonly cloudinaryService: CloudinaryService,
     private readonly fireBaseService: FirebaseService,
     // Inject JwtService để dùng cho Socket
+    private readonly httpService: HttpService,
     private readonly jwtService: JwtService,
+    private readonly config: ConfigService
   ) { }
 
   async verifyUserToken(token: string): Promise<string> {
@@ -61,8 +65,6 @@ export class ChatbotService {
       .leftJoinAndSelect('message.sender', 'sender')
       .where('message.senderId = :userId', { userId })
       .orWhere('message.receiverId = :userId', {userId});
-    
-    console.log(queryBuilder);
     
     return paginate(queryBuilder, pageOptionsDto, 'message');
   }
@@ -124,5 +126,37 @@ export class ChatbotService {
     // Chạy song song tất cả các tác vụ
     const results = await Promise.all(uploadTasks);
     return results;
+  }
+
+  async getAiStream(prompt: string) {
+    try {
+      const apiUrl = this.config.get('ngrokUrl');
+      
+      const response = await this.httpService.axiosRef.post(
+        `${apiUrl}/chat/stream`,
+        { 
+          message: prompt,
+          options: { temperature: 0, num_predict: 2048 }
+          // Đã xóa timeout ở đây vì đây là dữ liệu gửi đi
+        },
+        { 
+          responseType: 'stream', 
+          timeout: 300000, // Cấu hình Axios chờ tối đa 5 phút (LLM có thể chạy lâu)
+          headers: { 
+            'ngrok-skip-browser-warning': '69420',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      return response.data;
+      
+    } catch (error) {
+      // In ra lỗi chi tiết từ Axios
+      console.error("Lỗi Axios tại getAiStream:", error);
+      
+      // Ném lại chính object error gốc để Controller bắt và xử lý
+      throw error; 
+    }
   }
 }

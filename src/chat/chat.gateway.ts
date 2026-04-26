@@ -177,7 +177,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.join(this.conversationUpdatesRoom(userId));
         console.log(`Socket ${client.id} joined conversation updates ${userId}`);
     }
-    //  XỬ LÝ LẮNG NGHE TIN NHẮN TỪ CLIENT toi ai
+    //  XỬ LÝ LẮNG NGHE TIN NHẮN TỪ CLIENT toi ai (STREAM qua Socket)
     @UsePipes(new ValidationPipe())
     @SubscribeMessage('send_message_to_chatbot')
     async handleAiMessage(
@@ -185,18 +185,59 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         @MessageBody() payload: SendMessageDto,
     ) {
         const senderId = client.data.userId;
-        console.log('Đã nhận được payload:', payload);
-        // Lưu tin nhắn vào Database thông qua ChatService
-        const savedMessage = await this.chatBotService.saveMessage(
-            senderId,'1010', payload);
-        console.log(savedMessage);
-        // Phát tin nhắn đến đúng AI room (chỉ người dùng hiện tại)
+        console.log('send promt ', payload.content);
+
+        // 1. Lưu tin nhắn của user vào DB và gửi lại cho chính user đó
+        const savedMessage = await this.chatBotService.saveMessage(senderId, '1010', payload);
         this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedMessage.message);
-        const reply = { content: 'reply message' }
-        const savedReplyMessage = await this.chatBotService.saveMessage(
-            '1010',senderId, reply);
-        this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedReplyMessage.message);
-        // Tính năng Push Notification (Gợi ý: Gọi logic đẩy vào Queue ở đây cho các user đang offline)
-        // this.chatService.handleOfflineNotifications(payload.conversationId, senderId, savedMessage);
+
+        try {
+            // 2. Gọi AI stream từ service
+            const stream = await this.chatBotService.getAiStream(payload.content ?? '');
+
+            if (!stream) {
+                client.emit('chatbot_error', { message: 'Không thể kết nối với AI provider.' });
+                return;
+            }
+
+            let fullReply = ''; // Gom toàn bộ text để lưu DB sau
+
+            // 3. Báo hiệu cho client bắt đầu nhận stream
+            client.emit('chatbot_stream_start');
+
+            // 4. Mỗi chunk data → emit ngay cho client qua socket (không cần HTTP)
+            stream.on('data', (chunk: Buffer) => {
+                const text = chunk.toString();
+                fullReply += text;
+                // Emit từng mảnh nhỏ cho client render realtime
+                client.emit('chatbot_stream_chunk', { chunk: text });
+            });
+
+            // 5. Khi stream kết thúc → lưu full reply vào DB và báo client
+            stream.on('end', async () => {
+                client.emit('chatbot_stream_end');
+                if (fullReply.trim()) {
+                    const savedReplyMessage = await this.chatBotService.saveMessage(
+                        '1010', senderId, { content: fullReply }
+                    );
+                    // Gửi message đã lưu DB (có id, timestamp...) để client cập nhật UI
+                    this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedReplyMessage.message);
+                }
+            });
+
+            // 6. Xử lý lỗi stream
+            stream.on('error', (err: any) => {
+                if (err.code === 'ECONNRESET') {
+                    console.warn('AI stream bị ngắt (ECONNRESET) - Ngrok/AI server timeout.');
+                } else {
+                    console.error('Lỗi stream AI:', err);
+                }
+                client.emit('chatbot_error', { message: 'Lỗi trong quá trình nhận phản hồi từ AI.' });
+            });
+
+        } catch (error) {
+            console.error('Lỗi khi gọi AI stream:', error);
+            client.emit('chatbot_error', { message: 'Lỗi máy chủ khi kết nối với AI.' });
+        }
     }
 }

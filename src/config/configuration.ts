@@ -13,5 +13,6 @@ export default () => ({
         JWT_REFRESH_EXPIRES: process.env.JWT_REFRESH_EXPIRES,
         JWT_ACCESS_EXPIRES: process.env.JWT_ACCESS_EXPIRES
     },
+    ngrokUrl: process.env.NGROK_URL,
     httpOnlyExpires: process.env.HTTP_ONLY_EXPIRES
 })
