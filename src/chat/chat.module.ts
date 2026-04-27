@@ -20,5 +20,6 @@ import { User } from 'src/users/entities/user.entity';
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway, CloudinaryService, FirebaseService],
+  exports: [ChatGateway],
 })
 export class ChatModule {}

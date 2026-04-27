@@ -93,7 +93,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         @ConnectedSocket() client: Socket,
         @MessageBody() payload: SendMessageDto,
     ) {
-        const senderId = client.data.userId;
+        const senderId = String(client.data.userId);
         console.log('Đã nhận được payload:', payload);
         // Lưu tin nhắn vào Database thông qua ChatService
         const savedMessage = await this.chatService.saveMessage(
@@ -184,51 +184,64 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         @ConnectedSocket() client: Socket,
         @MessageBody() payload: SendMessageDto,
     ) {
-        const senderId = client.data.userId;
+        const senderId = String(client.data.userId);
         console.log('send promt ', payload.content);
 
         // 1. Lưu tin nhắn của user vào DB và gửi lại cho chính user đó
         const savedMessage = await this.chatBotService.saveMessage(senderId, '1010', payload);
+        const bearer = client.handshake.headers.authorization
+        console.log("bearer token ",bearer);
+        
         this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedMessage.message);
-
+        //console.log("promt ",);
+        
         try {
             // 2. Gọi AI stream từ service
-            const stream = await this.chatBotService.getAiStream(payload.content ?? '');
+            const stream = await this.chatBotService.getAiStream(payload.content ?? '', senderId);
 
             if (!stream) {
                 client.emit('chatbot_error', { message: 'Không thể kết nối với AI provider.' });
                 return;
             }
 
-            let fullReply = ''; // Gom toàn bộ text để lưu DB sau
+            let fullReply = '';
+            
+            // TẠO MỘT ID TẠM THỜI CHO TIN NHẮN STREAM
+            const aiMessageTempId = 'ai-msg-' + Date.now();
 
-            // 3. Báo hiệu cho client bắt đầu nhận stream
-            client.emit('chatbot_stream_start');
-
-            // 4. Mỗi chunk data → emit ngay cho client qua socket (không cần HTTP)
+            // 3. Mỗi chunk data → emit ngay cho client
             stream.on('data', (chunk: Buffer) => {
-                const text = chunk.toString();
+                const text = chunk.toString('utf-8');
                 fullReply += text;
-                // Emit từng mảnh nhỏ cho client render realtime
-                client.emit('chatbot_stream_chunk', { chunk: text });
+                console.log('emit chunk');
+                
+                // ĐỔI TÊN EVENT VÀ CẤU TRÚC CHO KHỚP VỚI VUE FRONTEND
+                client.emit('receive_ai_chunk', { 
+                    id: aiMessageTempId, 
+                    text: text 
+                });
             });
 
-            // 5. Khi stream kết thúc → lưu full reply vào DB và báo client
+            // 4. Khi stream kết thúc
             stream.on('end', async () => {
-                client.emit('chatbot_stream_end');
                 if (fullReply.trim()) {
+                    // Lưu full reply vào DB
                     const savedReplyMessage = await this.chatBotService.saveMessage(
                         '1010', senderId, { content: fullReply }
                     );
-                    // Gửi message đã lưu DB (có id, timestamp...) để client cập nhật UI
-                    this.server.to(this.aiRoom(senderId)).emit('receive_chatbot_message', savedReplyMessage.message);
+                    
+                    // Báo cho Frontend biết là đã stream xong và gửi kèm ID thật từ DB
+                    client.emit('receive_ai_end', { 
+                        tempId: aiMessageTempId, 
+                        finalId: savedReplyMessage.message.id 
+                    });
                 }
             });
 
-            // 6. Xử lý lỗi stream
+            // 5. Xử lý lỗi stream
             stream.on('error', (err: any) => {
                 if (err.code === 'ECONNRESET') {
-                    console.warn('AI stream bị ngắt (ECONNRESET) - Ngrok/AI server timeout.');
+                    console.warn('AI stream bị ngắt (ECONNRESET)');
                 } else {
                     console.error('Lỗi stream AI:', err);
                 }

@@ -49,7 +49,7 @@ export class ChatbotController {
   }
 
   @Post('stream')
-  async streamAiPost(@Body('prompt') prompt: string, @Res() res: Response) {
+  async streamAiPost(@Body('prompt') prompt: string, @Res() res: Response, @GetUser() user: any) {
     try {
       console.log("send promt ", prompt);
 
@@ -59,7 +59,7 @@ export class ChatbotController {
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders(); // Gửi header ngay lập tức tránh timeout
 
-      const stream = await this.chatbotService.getAiStream(prompt);
+      const stream = await this.chatbotService.getAiStream(prompt,user.userId);
 
       // Kiểm tra nhỡ service trả về null/undefined gây lỗi stream.on
       if (!stream) {
@@ -78,7 +78,13 @@ export class ChatbotController {
       stream.on('data', (chunk) => {
         // Kiểm tra client còn kết nối không trước khi ghi
         if (!res.writableEnded) {
-          res.write(`data: ${chunk.toString()}\n\n`);
+          const text = chunk.toString();
+          const lines = text.split(/\r?\n/);
+          // SSE yêu cầu mỗi dòng phải có tiền tố "data:"
+          for (const line of lines) {
+            res.write(`data: ${line}\n`);
+          }
+          res.write('\n');
         }
       });
 
